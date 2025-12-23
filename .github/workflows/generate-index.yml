@@ -6,92 +6,96 @@ on:
   pull_request:
     branches: [ main, master ]
 
+permissions:
+  contents: write
+
 jobs:
   generate-index:
     runs-on: ubuntu-latest
-    
+
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      
-    - name: Install jq
-      run: sudo apt-get install -y jq
-      
-    - name: Generate index.json
-      run: |
-        # Start the JSON structure
-        echo '{ "last_updated": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'", "semesters": [] }' > index.json
-        
-        # Loop through all directories (except hidden ones)
-        for dir in */; do
-          # Skip hidden folders and .github
-          if [[ "$dir" == .*/ || "$dir" == ".github/" ]]; then
-            continue
-          fi
-          
-          dirname=$(basename "$dir")
-          echo "📁 Processing folder: $dirname"
-          
-          # Check for meta.json for custom display name
-          display_name="$dirname"
-          if [ -f "${dir}meta.json" ]; then
-            custom_name=$(jq -r '.display_name // empty' "${dir}meta.json" 2>/dev/null)
-            if [ -n "$custom_name" ]; then
-              display_name="$custom_name"
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Generate index.json
+        run: |
+          set -euo pipefail
+
+          # Start JSON
+          jq -n --arg ts "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" '{ last_updated: $ts, semesters: [] }' > index.json
+
+          for dir in */; do
+            [[ "$dir" == .*/ || "$dir" == ".github/" ]] && continue
+
+            dirname="$(basename "$dir")"
+            echo "📁 Processing folder: $dirname"
+
+            display_name="$dirname"
+            if [[ -f "${dir}meta.json" ]]; then
+              custom_name="$(jq -r '.display_name // empty' "${dir}meta.json" 2>/dev/null || true)"
+              [[ -n "$custom_name" ]] && display_name="$custom_name"
             fi
-          fi
-          
-          # Find all .apkg and .json deck files (not meta.json)
-          files_json="[]"
-          
-          for file in "$dir"*.apkg "$dir"*.json; do
-            # Skip if no matches or if it's meta.json
-            [ -e "$file" ] || continue
-            [[ "$file" == *"meta.json" ]] && continue
-            
-            filename=$(basename "$file")
-            filepath="$file"
-            
-            # Get file size in MB
-            size_bytes=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null)
-            size_mb=$(echo "scale=2; $size_bytes / 1048576" | bc)
-            
-            # Extract name without extension
-            name="${filename%.*}"
-            # Convert underscores and hyphens to spaces, capitalize
-            pretty_name=$(echo "$name" | sed 's/[_-]/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2))}1')
-            
-            # Add to files array
-            files_json=$(echo "$files_json" | jq \
-              --arg path "$filepath" \
-              --arg name "$pretty_name" \
-              --arg size "$size_mb" \
-              '. += [{"path": $path, "name": $name, "size_mb": ($size | tonumber)}]')
-            
-            echo "  📄 Found: $filename ($size_mb MB)"
+
+            files_json='[]'
+
+            shopt -s nullglob
+            for file in "$dir"*.apkg "$dir"*.json; do
+              [[ "$file" == *"meta.json" ]] && continue
+
+              filename="$(basename "$file")"
+              size_bytes="$(stat -c%s "$file")"
+              size_mb="$(awk -v b="$size_bytes" 'BEGIN{printf "%.2f", b/1048576}')"
+
+              name="${filename%.*}"
+              pretty_name="$(echo "$name" | sed 's/[_-]/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2))}1')"
+
+              files_json="$(echo "$files_json" | jq \
+                --arg path "$file" \
+                --arg name "$pretty_name" \
+                --argjson size_mb "$size_mb" \
+                '. + [{path:$path, name:$name, size_mb:$size_mb}]'
+              )"
+
+              echo "  📄 Found: $filename (${size_mb} MB)"
+            done
+            shopt -u nullglob
+
+            file_count="$(echo "$files_json" | jq 'length')"
+            if [[ "$file_count" -gt 0 ]]; then
+              tmp="$(mktemp)"
+              jq --arg name "$dirname" \
+                 --arg display "$display_name" \
+                 --argjson files "$files_json" \
+                 '.semesters += [{name:$name, display_name:$display, files:$files}]' \
+                 index.json > "$tmp" && mv "$tmp" index.json
+
+              echo "  ✅ Added $file_count files from $dirname"
+            fi
           done
-          
-          # Only add semester if it has files
-          file_count=$(echo "$files_json" | jq '. | length')
-          if [ "$file_count" -gt 0 ]; then
-            # Add this semester to the index
-            tmp=$(mktemp)
-            jq --arg name "$dirname" \
-               --arg display "$display_name" \
-               --argjson files "$files_json" \
-               '.semesters += [{"name": $name, "display_name": $display, "files": $files}]' \
-               index.json > "$tmp" && mv "$tmp" index.json
-            
-            echo "  ✅ Added $file_count files from $dirname"
+
+          echo ""
+          echo "📋 Generated index.json:"
+          jq . index.json
+
+      - name: Commit and push index.json
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add index.json
+
+          # If nothing changed, do nothing
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
           fi
-        done
-        
-        echo ""
-        echo "📋 Generated index.json:"
-        cat index.json | jq .
-        
-    - name: Upload index.json as artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: deck-index
-        path: index.json
+
+          git commit -m "chore: update deck index [skip ci]"
+          git push
