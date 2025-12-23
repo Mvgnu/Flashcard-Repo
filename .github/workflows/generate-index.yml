@@ -90,16 +90,8 @@ jobs:
         echo "📋 Generated index.json:"
         cat index.json | jq .
         
-    - name: Commit and push if changed
-      run: |
-        git config --local user.name 'OpenAnki Bot'
-        git config --local user.email 'bot@openanki.app'
-        git add index.json
-        
-        # Only commit if there are changes
-        if git diff --staged --quiet; then
-          echo "No changes to index.json"
-        else
-          git commit -m "🔄 Auto-update deck index"
-          git push
-        fi
+    - name: Upload index.json as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: deck-index
+        path: index.json
