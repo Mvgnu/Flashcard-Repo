@@ -1,0 +1,26 @@
+{
+    "last_updated": "2025-12-23T20:15:00Z",
+    "semesters": [
+        {
+            "name": "biologie",
+            "display_name": "🧬 Biologie",
+            "files": [
+                {
+                    "path": "biologie/Mikrobiologie Vorlesung (Janne).apkg",
+                    "name": "Mikrobiologie Vorlesung",
+                    "size_mb": 5.9
+                },
+                {
+                    "path": "biologie/Pflanzenphys Harter (Janne).apkg",
+                    "name": "Pflanzenphysiologie Harter",
+                    "size_mb": 5.1
+                }
+            ]
+        },
+        {
+            "name": "semester_1",
+            "display_name": "📚 Semester 1",
+            "files": []
+        }
+    ]
+}
